@@ -1,4 +1,6 @@
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
 from pydantic import BaseModel
 import uuid
 import os
@@ -12,6 +14,15 @@ API_KEY = os.getenv("API_KEY")
 
 
 app = FastAPI(title="AI Generated Voice Detection API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # allow all origins (ok for demo)
+    allow_credentials=True,
+    allow_methods=["*"],   # GET, POST, etc
+    allow_headers=["*"],   # allow headers like x-api-key
+)
+
 
 # ---------------- ROOT ----------------
 @app.get("/")
