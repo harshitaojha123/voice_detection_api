@@ -1,9 +1,7 @@
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import os
 import uuid
-import requests
 
 import librosa
 import numpy as np
@@ -16,7 +14,7 @@ app = FastAPI(title="AI Generated Voice Detection API")
 # ---------------- CORS ----------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],        # allow all (demo)
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -27,17 +25,16 @@ app.add_middleware(
 def home():
     return {
         "message": "AI Generated Voice Detection API is running",
-        "endpoint": "/detect-voice"
+        "endpoint": "/detect-voice-file"
     }
 
-# ---------------- REQUEST MODEL ----------------
-class VoiceRequest(BaseModel):
-    audio_file_url: str
-    language: str
-
-# ---------------- API ENDPOINT ----------------
-@app.post("/detect-voice")
-def detect_voice(data: VoiceRequest, x_api_key: str = Header(None)):
+# ---------------- API ENDPOINT (FILE UPLOAD) ----------------
+@app.post("/detect-voice-file")
+async def detect_voice(
+    file: UploadFile = File(...),
+    language: str = "en",
+    x_api_key: str = Header(None)
+):
 
     # 1️⃣ API KEY VALIDATION
     if not API_KEY or x_api_key != API_KEY:
@@ -45,34 +42,21 @@ def detect_voice(data: VoiceRequest, x_api_key: str = Header(None)):
 
     # 2️⃣ LANGUAGE VALIDATION
     supported_languages = ["en", "hi", "ta", "ml", "te"]
-    if data.language not in supported_languages:
+    if language not in supported_languages:
         raise HTTPException(status_code=400, detail="Unsupported language")
 
-    # 3️⃣ WAV FORMAT VALIDATION
-    if not data.audio_file_url.lower().endswith(".wav"):
+    # 3️⃣ FILE TYPE VALIDATION
+    if not file.filename.lower().endswith(".wav"):
         raise HTTPException(
             status_code=400,
             detail="Only WAV audio format is supported"
         )
 
-    # 4️⃣ DOWNLOAD AUDIO
-    try:
-        response = requests.get(
-    data.audio_file_url,
-    timeout=15,
-    allow_redirects=True,
-    headers={"User-Agent": "Mozilla/5.0"}
-)
+    filename = f"audio_{uuid.uuid4().hex}.wav"
 
-        if response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Unable to download audio")
-
-        filename = f"audio_{uuid.uuid4().hex}.wav"
-        with open(filename, "wb") as f:
-            f.write(response.content)
-
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid audio URL")
+    # 4️⃣ SAVE FILE
+    with open(filename, "wb") as f:
+        f.write(await file.read())
 
     try:
         # 5️⃣ LOAD AUDIO (Railway-safe)
@@ -86,16 +70,12 @@ def detect_voice(data: VoiceRequest, x_api_key: str = Header(None)):
         # 7️⃣ DECISION LOGIC
         if energy_variance < 0.0005 and silence_ratio < 0.15:
             classification = "AI_GENERATED"
-            confidence_score = round(
-                min(0.95, 0.6 + (0.0005 - energy_variance)), 2
-            )
-            explanation = "Low energy variation suggests AI-generated voice."
+            confidence_score = 0.85
+            explanation = "Low energy variation and uniform speech patterns detected."
         else:
             classification = "HUMAN"
-            confidence_score = round(
-                min(0.95, 0.6 + energy_variance), 2
-            )
-            explanation = "Natural speech variations suggest human voice."
+            confidence_score = 0.75
+            explanation = "Natural energy variations detected in speech."
 
     except Exception:
         os.remove(filename)
