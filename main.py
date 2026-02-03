@@ -4,16 +4,19 @@ from pydantic import BaseModel
 import os
 import uuid
 import base64
-
 import librosa
 import numpy as np
 
-# ---------------- CONFIG ----------------
+# ============================================================
+# CONFIG
+# ============================================================
 API_KEY = os.getenv("API_KEY")  # set in Railway Variables
 
 app = FastAPI(title="AI Generated Voice Detection API")
 
-# ---------------- CORS ----------------
+# ============================================================
+# CORS
+# ============================================================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,21 +25,55 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------- ROOT ----------------
+# ============================================================
+# ROOT
+# ============================================================
 @app.get("/")
 def home():
     return {
         "message": "AI Generated Voice Detection API is running",
-        "endpoints": [
-            "/detect-voice-file (multipart upload)",
-            "/detect-voice-base64 (hackathon)"
-        ]
+        "endpoints": {
+            "file_upload": "/detect-voice-file",
+            "base64": "/detect-voice-base64"
+        }
     }
 
 # ============================================================
-# FILE UPLOAD ENDPOINT (Swagger / Demo)
+# SHARED AUDIO ANALYSIS LOGIC
 # ============================================================
+def analyze_audio(filename: str):
+    try:
+        # Load audio safely
+        y, sr = librosa.load(filename, sr=None)
 
+        if len(y) == 0:
+            raise Exception("Empty audio")
+
+        rms = librosa.feature.rms(y=y)[0]
+        energy_variance = float(np.var(rms))
+        silence_ratio = float(np.sum(np.abs(y) < 0.01) / len(y))
+
+        if energy_variance < 0.0005 and silence_ratio < 0.15:
+            classification = "AI_GENERATED"
+            confidence = round(0.85, 2)
+            explanation = "Low energy variation and uniform speech patterns detected"
+        else:
+            classification = "HUMAN"
+            confidence = round(0.75, 2)
+            explanation = "Natural speech energy variations detected"
+
+        return {
+            "classification": classification,
+            "confidence_score": confidence,
+            "explanation": explanation
+        }
+
+    except Exception:
+        raise HTTPException(status_code=500, detail="Audio processing failed")
+
+# ============================================================
+# FILE UPLOAD ENDPOINT (Swagger / Manual Testing)
+# ============================================================
 @app.post("/detect-voice-file")
 async def detect_voice_file(
     file: UploadFile = File(...),
@@ -54,20 +91,19 @@ async def detect_voice_file(
 
     filename = f"/tmp/{uuid.uuid4().hex}.wav"
 
-    with open(filename, "wb") as f:
-        f.write(await file.read())
-
     try:
+        with open(filename, "wb") as f:
+            f.write(await file.read())
+
         return analyze_audio(filename)
+
     finally:
         if os.path.exists(filename):
             os.remove(filename)
 
-
 # ============================================================
-# BASE64 ENDPOINT (HACKATHON REQUIRED)
+# BASE64 ENDPOINT (GUVI HACKATHON)
 # ============================================================
-
 class Base64VoiceRequest(BaseModel):
     language: str
     audio_format: str
@@ -91,7 +127,13 @@ def detect_voice_base64(
     filename = f"/tmp/{uuid.uuid4().hex}.wav"
 
     try:
-        audio_bytes = base64.b64decode(data.audio_base64)
+        # Handle base64 with or without data URI
+        base64_data = data.audio_base64
+        if "," in base64_data:
+            base64_data = base64_data.split(",")[1]
+
+        audio_bytes = base64.b64decode(base64_data)
+
         with open(filename, "wb") as f:
             f.write(audio_bytes)
 
@@ -103,32 +145,3 @@ def detect_voice_base64(
     finally:
         if os.path.exists(filename):
             os.remove(filename)
-
-
-# ============================================================
-# SHARED AUDIO ANALYSIS LOGIC
-# ============================================================
-
-def analyze_audio(filename: str):
-    try:
-        y, sr = librosa.load(filename, sr=None)
-
-        rms = librosa.feature.rms(y=y)[0]
-        energy_variance = np.var(rms)
-        silence_ratio = np.sum(np.abs(y) < 0.01) / len(y)
-
-        if energy_variance < 0.0005 and silence_ratio < 0.15:
-            return {
-                "classification": "AI_GENERATED",
-                "confidence_score": 0.85,
-                "explanation": "Low energy variation and uniform patterns detected"
-            }
-
-        return {
-            "classification": "HUMAN",
-            "confidence_score": 0.75,
-            "explanation": "Natural speech variation detected"
-        }
-
-    except Exception:
-        raise HTTPException(status_code=500, detail="Audio processing failed")
