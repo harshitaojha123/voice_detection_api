@@ -1,16 +1,15 @@
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import os
-import uuid
-import base64
+from typing import Optional
+import os, uuid, base64
 import librosa
 import numpy as np
 
 # ============================================================
 # CONFIG
 # ============================================================
-API_KEY = os.getenv("API_KEY")  # Set this in Railway / Render env vars
+API_KEY = os.getenv("API_KEY")  # Set in Railway Variables
 
 app = FastAPI(title="AI Generated Voice Detection API")
 
@@ -36,12 +35,13 @@ def home():
     }
 
 # ============================================================
-# REQUEST MODEL (MATCHES TESTER)
+# REQUEST MODEL (GUVI COMPATIBLE)
 # ============================================================
 class VoiceRequest(BaseModel):
-    audio: str              # Base64 MP3
-    language: str           # en, hi, ta, ml, te
-    message: str | None = None
+    language: str
+    audio_format: str
+    audio: Optional[str] = None
+    audio_base64: Optional[str] = None
 
 # ============================================================
 # AUDIO ANALYSIS
@@ -70,26 +70,33 @@ def analyze_audio(filename: str):
         }
 
 # ============================================================
-# MAIN ENDPOINT (GUVI / TESTER COMPATIBLE)
+# MAIN ENDPOINT
 # ============================================================
 @app.post("/detect")
 def detect_voice(
     data: VoiceRequest,
-    authorization: str = Header(None)
+    x_api_key: str = Header(None)
 ):
-    # ---- AUTH CHECK ----
-    if not authorization or authorization.replace("Bearer ", "") != API_KEY:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    # ---- AUTH ----
+    if not x_api_key or x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API Key")
 
-    # ---- LANGUAGE CHECK ----
+    # ---- LANGUAGE ----
     if data.language not in ["en", "hi", "ta", "ml", "te"]:
         raise HTTPException(status_code=400, detail="Unsupported language")
+
+    # ---- AUDIO FORMAT ----
+    if data.audio_format.lower() != "mp3":
+        raise HTTPException(status_code=400, detail="Only MP3 supported")
+
+    # ---- PICK AUDIO FIELD ----
+    audio_b64 = data.audio or data.audio_base64
+    if not audio_b64:
+        raise HTTPException(status_code=400, detail="Audio data missing")
 
     filename = f"/tmp/{uuid.uuid4().hex}.mp3"
 
     try:
-        # Handle base64 (with or without data URI)
-        audio_b64 = data.audio
         if "," in audio_b64:
             audio_b64 = audio_b64.split(",")[1]
 
