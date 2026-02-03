@@ -1,15 +1,17 @@
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
-import os, uuid, base64
+import os
+import uuid
+import base64
 import librosa
 import numpy as np
 
 # ============================================================
 # CONFIG
 # ============================================================
-API_KEY = os.getenv("API_KEY")  # Set in Railway Variables
+API_KEY = os.getenv("API_KEY")  # Must be set in Railway Variables
 
 app = FastAPI(title="AI Generated Voice Detection API")
 
@@ -35,13 +37,17 @@ def home():
     }
 
 # ============================================================
-# REQUEST MODEL (GUVI COMPATIBLE)
+# REQUEST MODEL (ACCEPTS CAMEL + SNAKE CASE)
 # ============================================================
 class VoiceRequest(BaseModel):
     language: str
-    audio_format: str
+
+    audio_format: str = Field(..., alias="audioFormat")
+    audio_base64: Optional[str] = Field(None, alias="audioBase64")
     audio: Optional[str] = None
-    audio_base64: Optional[str] = None
+
+    class Config:
+        allow_population_by_field_name = True
 
 # ============================================================
 # AUDIO ANALYSIS
@@ -70,22 +76,22 @@ def analyze_audio(filename: str):
         }
 
 # ============================================================
-# MAIN ENDPOINT
+# MAIN ENDPOINT (GUVI TESTER READY)
 # ============================================================
 @app.post("/detect")
 def detect_voice(
     data: VoiceRequest,
     x_api_key: str = Header(None)
 ):
-    # ---- AUTH ----
+    # ---- AUTH CHECK ----
     if not x_api_key or x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API Key")
 
-    # ---- LANGUAGE ----
+    # ---- LANGUAGE CHECK ----
     if data.language not in ["en", "hi", "ta", "ml", "te"]:
         raise HTTPException(status_code=400, detail="Unsupported language")
 
-    # ---- AUDIO FORMAT ----
+    # ---- AUDIO FORMAT CHECK ----
     if data.audio_format.lower() != "mp3":
         raise HTTPException(status_code=400, detail="Only MP3 supported")
 
@@ -97,6 +103,7 @@ def detect_voice(
     filename = f"/tmp/{uuid.uuid4().hex}.mp3"
 
     try:
+        # Remove data URI if present
         if "," in audio_b64:
             audio_b64 = audio_b64.split(",")[1]
 
