@@ -57,7 +57,13 @@ def detect_voice(data: VoiceRequest, x_api_key: str = Header(None)):
 
     # 4️⃣ DOWNLOAD AUDIO
     try:
-        response = requests.get(data.audio_file_url, timeout=10)
+        response = requests.get(
+    data.audio_file_url,
+    timeout=15,
+    allow_redirects=True,
+    headers={"User-Agent": "Mozilla/5.0"}
+)
+
         if response.status_code != 200:
             raise HTTPException(status_code=400, detail="Unable to download audio")
 
