@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Header, HTTPException, UploadFile, File
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
@@ -10,7 +10,7 @@ import numpy as np
 # ============================================================
 # CONFIG
 # ============================================================
-API_KEY = os.getenv("API_KEY")  # set in Railway Variables
+API_KEY = os.getenv("API_KEY")  # Set this in Railway / Render env vars
 
 app = FastAPI(title="AI Generated Voice Detection API")
 
@@ -32,107 +32,68 @@ app.add_middleware(
 def home():
     return {
         "message": "AI Generated Voice Detection API is running",
-        "endpoints": {
-            "file_upload": "/detect-voice-file",
-            "base64": "/detect-voice-base64"
-        }
+        "endpoint": "/detect"
     }
 
 # ============================================================
-# SHARED AUDIO ANALYSIS LOGIC
+# REQUEST MODEL (MATCHES TESTER)
+# ============================================================
+class VoiceRequest(BaseModel):
+    audio: str              # Base64 MP3
+    language: str           # en, hi, ta, ml, te
+    message: str | None = None
+
+# ============================================================
+# AUDIO ANALYSIS
 # ============================================================
 def analyze_audio(filename: str):
-    try:
-        # Load audio safely
-        y, sr = librosa.load(filename, sr=None)
+    y, sr = librosa.load(filename, sr=None)
 
-        if len(y) == 0:
-            raise Exception("Empty audio")
+    if len(y) == 0:
+        raise Exception("Empty audio")
 
-        rms = librosa.feature.rms(y=y)[0]
-        energy_variance = float(np.var(rms))
-        silence_ratio = float(np.sum(np.abs(y) < 0.01) / len(y))
+    rms = librosa.feature.rms(y=y)[0]
+    energy_variance = float(np.var(rms))
+    silence_ratio = float(np.sum(np.abs(y) < 0.01) / len(y))
 
-        if energy_variance < 0.0005 and silence_ratio < 0.15:
-            classification = "AI_GENERATED"
-            confidence = round(0.85, 2)
-            explanation = "Low energy variation and uniform speech patterns detected"
-        else:
-            classification = "HUMAN"
-            confidence = round(0.75, 2)
-            explanation = "Natural speech energy variations detected"
-
+    if energy_variance < 0.0005 and silence_ratio < 0.15:
         return {
-            "classification": classification,
-            "confidence_score": confidence,
-            "explanation": explanation
+            "classification": "AI-generated",
+            "confidence": 0.85,
+            "explanation": "Low energy variance and uniform speech patterns detected"
+        }
+    else:
+        return {
+            "classification": "Human-generated",
+            "confidence": 0.75,
+            "explanation": "Natural pitch and energy variation detected"
         }
 
-    except Exception:
-        raise HTTPException(status_code=500, detail="Audio processing failed")
-
 # ============================================================
-# FILE UPLOAD ENDPOINT (Swagger / Manual Testing)
+# MAIN ENDPOINT (GUVI / TESTER COMPATIBLE)
 # ============================================================
-@app.post("/detect-voice-file")
-async def detect_voice_file(
-    file: UploadFile = File(...),
-    language: str = "en",
-    x_api_key: str = Header(None)
+@app.post("/detect")
+def detect_voice(
+    data: VoiceRequest,
+    authorization: str = Header(None)
 ):
-    if not API_KEY or x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API Key")
+    # ---- AUTH CHECK ----
+    if not authorization or authorization.replace("Bearer ", "") != API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
-    if language not in ["en", "hi", "ta", "ml", "te"]:
-        raise HTTPException(status_code=400, detail="Unsupported language")
-
-    if not file.filename.lower().endswith(".wav"):
-        raise HTTPException(status_code=400, detail="Only WAV audio supported")
-
-    filename = f"/tmp/{uuid.uuid4().hex}.wav"
-
-    try:
-        with open(filename, "wb") as f:
-            f.write(await file.read())
-
-        return analyze_audio(filename)
-
-    finally:
-        if os.path.exists(filename):
-            os.remove(filename)
-
-# ============================================================
-# BASE64 ENDPOINT (GUVI HACKATHON)
-# ============================================================
-class Base64VoiceRequest(BaseModel):
-    language: str
-    audio_format: str
-    audio_base64: str
-
-
-@app.post("/detect-voice-base64")
-def detect_voice_base64(
-    data: Base64VoiceRequest,
-    x_api_key: str = Header(None)
-):
-    if not API_KEY or x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid API Key")
-
+    # ---- LANGUAGE CHECK ----
     if data.language not in ["en", "hi", "ta", "ml", "te"]:
         raise HTTPException(status_code=400, detail="Unsupported language")
 
-    if data.audio_format.lower() != "wav":
-        raise HTTPException(status_code=400, detail="Only WAV audio supported")
-
-    filename = f"/tmp/{uuid.uuid4().hex}.wav"
+    filename = f"/tmp/{uuid.uuid4().hex}.mp3"
 
     try:
-        # Handle base64 with or without data URI
-        base64_data = data.audio_base64
-        if "," in base64_data:
-            base64_data = base64_data.split(",")[1]
+        # Handle base64 (with or without data URI)
+        audio_b64 = data.audio
+        if "," in audio_b64:
+            audio_b64 = audio_b64.split(",")[1]
 
-        audio_bytes = base64.b64decode(base64_data)
+        audio_bytes = base64.b64decode(audio_b64)
 
         with open(filename, "wb") as f:
             f.write(audio_bytes)
@@ -140,7 +101,7 @@ def detect_voice_base64(
         return analyze_audio(filename)
 
     except Exception:
-        raise HTTPException(status_code=400, detail="Invalid base64 audio")
+        raise HTTPException(status_code=400, detail="Invalid audio input")
 
     finally:
         if os.path.exists(filename):
